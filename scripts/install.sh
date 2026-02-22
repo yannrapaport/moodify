@@ -29,6 +29,7 @@ if ! command -v docker &>/dev/null; then
 else
   info "Docker already installed: $(docker --version)"
 fi
+sudo systemctl enable docker
 
 # Caddy
 if ! command -v caddy &>/dev/null; then
