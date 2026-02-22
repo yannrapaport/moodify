@@ -1,0 +1,12 @@
+services:
+  moodify:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - moodify_data:/data
+
+volumes:
+  moodify_data:
