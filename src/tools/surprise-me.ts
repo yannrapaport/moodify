@@ -95,7 +95,8 @@ export function registerSurpriseMeTools(server: McpServer): void {
     track_name: z.string().describe('Track name'),
     artist_name: z.string().describe('Artist name'),
     artist_id: z.string().describe('Artist ID (for genre caching)'),
-    rating: z.union([z.literal(1), z.literal(-1)]).describe('1 for thumbs up, -1 for thumbs down'),
+    // preprocess: MCP may send numbers as strings, coerce before literal check
+    rating: z.preprocess((v) => typeof v === 'string' ? Number(v) : v, z.union([z.literal(1), z.literal(-1)])).describe('1 for thumbs up, -1 for thumbs down'),
     comment: z.string().optional().describe('Optional comment, e.g. "too energetic"'),
   }, async (args) => {
     try {
@@ -188,7 +189,8 @@ export function registerSurpriseMeTools(server: McpServer): void {
 
   server.tool('get_feedback_history', 'View your track rating history', {
     limit: z.number().int().min(1).max(100).default(20),
-    rating: z.union([z.literal(1), z.literal(-1)]).optional().describe('Filter by rating: 1 (👍) or -1 (👎)'),
+    // preprocess: MCP may send numbers as strings, coerce before literal check
+    rating: z.preprocess((v) => v !== undefined && typeof v === 'string' ? Number(v) : v, z.union([z.literal(1), z.literal(-1)]).optional()).describe('Filter by rating: 1 (👍) or -1 (👎)'),
   }, async (args) => {
     try {
       const feedback = getAllFeedback(args.limit as number, args.rating as 1 | -1 | undefined);
