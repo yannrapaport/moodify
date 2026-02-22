@@ -14,8 +14,8 @@ FROM node:20-alpine3.20 AS runner
 
 WORKDIR /app
 
-# Ensure /app is owned by node before switching user
-RUN chown node:node /app
+# Ensure /app and /data are owned by node before switching user
+RUN chown node:node /app && mkdir -p /data && chown node:node /data
 
 # Run as non-root user
 USER node

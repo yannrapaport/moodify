@@ -3,10 +3,33 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      - HOST=0.0.0.0
     volumes:
       - moodify_data:/data
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+    depends_on:
+      - moodify
+
+networks:
+  internal:
 
 volumes:
   moodify_data:
+  caddy_data:
+  caddy_config:

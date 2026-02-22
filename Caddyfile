@@ -1,0 +1,3 @@
+moodify.theproductguy.cloud {
+    reverse_proxy moodify:3000
+}
