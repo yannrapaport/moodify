@@ -5,34 +5,10 @@ services:
     env_file: .env
     environment:
       - HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:3000:3000"
     volumes:
       - moodify_data:/data
-    networks:
-      - internal
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    networks:
-      - internal
-    depends_on:
-      - moodify
-
-networks:
-  internal:
 
 volumes:
   moodify_data:
-  caddy_data:
-  caddy_config:
