@@ -115,7 +115,7 @@ describe('503 spotify_not_connected', () => {
 // ── Endpoint happy paths ─────────────────────────────────────────────────────
 
 describe('GET /api/g2/now-playing', () => {
-  it('returns track info with isLiked when something is playing', async () => {
+  it('returns track info with isLiked + coverUrl when something is playing', async () => {
     const client = makeClientStub();
     client.player.getCurrentlyPlayingTrack.mockResolvedValue({
       is_playing: true,
@@ -124,7 +124,14 @@ describe('GET /api/g2/now-playing', () => {
         name: 'Strobe',
         type: 'track',
         artists: [{ name: 'Deadmau5' }],
-        album: { name: 'For Lack of a Better Name' },
+        album: {
+          name: 'For Lack of a Better Name',
+          images: [
+            { url: 'https://i.scdn.co/image/big.jpg', width: 640, height: 640 },
+            { url: 'https://i.scdn.co/image/mid.jpg', width: 300, height: 300 },
+            { url: 'https://i.scdn.co/image/sm.jpg', width: 64, height: 64 },
+          ],
+        },
       },
     });
     client.currentUser.tracks.hasSavedTracks.mockResolvedValue([true]);
@@ -143,8 +150,32 @@ describe('GET /api/g2/now-playing', () => {
         artists: ['Deadmau5'],
         albumName: 'For Lack of a Better Name',
         isLiked: true,
+        coverUrl: 'https://i.scdn.co/image/mid.jpg',
       },
     });
+  });
+
+  it('returns coverUrl=null when album has no images', async () => {
+    const client = makeClientStub();
+    client.player.getCurrentlyPlayingTrack.mockResolvedValue({
+      is_playing: true,
+      item: {
+        id: 't1',
+        name: 'X',
+        type: 'track',
+        artists: [],
+        album: { name: 'Y', images: [] },
+      },
+    });
+    getClient.mockResolvedValue(client);
+
+    const app = buildApp();
+    const res = await app.request('/api/g2/now-playing', {
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.track.coverUrl).toBeNull();
   });
 
   it('returns track:null when nothing is playing', async () => {
@@ -261,6 +292,62 @@ describe('POST /api/g2/like', () => {
     expect(spotifyFetch).toHaveBeenCalledWith('/me/tracks?ids=explicit-id', { method: 'PUT' });
     // Should NOT have polled for the current track since trackId was provided
     expect(client.player.getCurrentlyPlayingTrack).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/g2/lyrics', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('returns plainLyrics + syncedLyrics on a 200 LRClib hit', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({
+        plainLyrics: 'la la la',
+        syncedLyrics: '[00:00.00]la la la',
+      }), { status: 200 })
+    ) as any;
+
+    const app = buildApp();
+    const res = await app.request('/api/g2/lyrics?trackName=Strobe&artistName=Deadmau5', {
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      plainLyrics: 'la la la',
+      syncedLyrics: '[00:00.00]la la la',
+    });
+  });
+
+  it('returns both null with status 200 when LRClib responds 404', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('not found', { status: 404 })) as any;
+
+    const app = buildApp();
+    const res = await app.request('/api/g2/lyrics?trackName=Unknown&artistName=Nobody', {
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ plainLyrics: null, syncedLyrics: null });
+  });
+
+  it('returns 502 when LRClib fails (network/5xx)', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('boom', { status: 500 })) as any;
+
+    const app = buildApp();
+    const res = await app.request('/api/g2/lyrics?trackName=X&artistName=Y', {
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'lyrics_unavailable' });
+  });
+
+  it('returns 400 when query params are missing', async () => {
+    const app = buildApp();
+    const res = await app.request('/api/g2/lyrics?trackName=OnlyTrack', {
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(400);
   });
 });
 

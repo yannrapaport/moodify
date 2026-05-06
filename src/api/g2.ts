@@ -69,6 +69,17 @@ g2Router.get('/now-playing', async (c) => {
       }
     }
 
+    // Pick the album cover closest to 300px wide (G2 renders it at 144px,
+    // so 300px gives us decent quality without being wasteful to fetch).
+    const images = (item.album?.images ?? []) as Array<{ url: string; width: number; height: number }>;
+    let coverUrl: string | null = null;
+    if (images.length > 0) {
+      const best = [...images].sort(
+        (a, b) => Math.abs((a.width ?? 0) - 300) - Math.abs((b.width ?? 0) - 300),
+      )[0];
+      coverUrl = best?.url ?? null;
+    }
+
     return c.json({
       isPlaying: !!state.is_playing,
       track: {
@@ -77,6 +88,7 @@ g2Router.get('/now-playing', async (c) => {
         artists: (item.artists ?? []).map((a: any) => a.name),
         albumName: item.album?.name ?? '',
         isLiked,
+        coverUrl,
       },
     });
   } catch (e) {
@@ -242,5 +254,43 @@ g2Router.post('/surprise-me', async (c) => {
     return c.json({ ok: true, track: { name: firstName, artists: firstArtists } });
   } catch (e) {
     return errorResponse(c, e);
+  }
+});
+
+// ── GET /lyrics ─────────────────────────────────────────────────────────────
+// Free, unauthenticated proxy to LRClib. Returns whatever the upstream gives us
+// (plainLyrics + syncedLyrics, either may be null), or a 200 with both null
+// when LRClib has no record. Surfaces 502 on network/5xx errors so the plugin
+// can show a clean "lyrics unavailable" message.
+g2Router.get('/lyrics', async (c) => {
+  const trackName = c.req.query('trackName');
+  const artistName = c.req.query('artistName');
+  if (!trackName || !artistName) {
+    return c.json({ error: 'missing_params' }, 400);
+  }
+
+  const url = 'https://lrclib.net/api/get?'
+    + 'track_name=' + encodeURIComponent(trackName)
+    + '&artist_name=' + encodeURIComponent(artistName);
+
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'moodify-g2 (https://github.com/yann/moodify)' },
+    });
+
+    if (res.status === 404) {
+      return c.json({ plainLyrics: null, syncedLyrics: null });
+    }
+    if (!res.ok) {
+      return c.json({ error: 'lyrics_unavailable' }, 502);
+    }
+
+    const data = await res.json() as { plainLyrics?: string | null; syncedLyrics?: string | null };
+    return c.json({
+      plainLyrics: data.plainLyrics ?? null,
+      syncedLyrics: data.syncedLyrics ?? null,
+    });
+  } catch {
+    return c.json({ error: 'lyrics_unavailable' }, 502);
   }
 });
