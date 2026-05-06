@@ -5,6 +5,8 @@ import { randomUUID } from 'crypto';
 import { createMcpServer } from './mcp.js';
 import { authRouter } from './auth/handler.js';
 import { getTokens } from './db/queries.js';
+import { apiKeyAuth } from './middleware/api-key.js';
+import { g2Router } from './api/g2.js';
 
 const ALLOWED_ORIGINS = new Set([
   'http://localhost',
@@ -14,8 +16,6 @@ const ALLOWED_ORIGINS = new Set([
 if (process.env.ALLOWED_ORIGIN) {
   ALLOWED_ORIGINS.add(process.env.ALLOWED_ORIGIN);
 }
-
-const MCP_API_KEY = process.env.MCP_API_KEY;
 
 // Per-session transports for stateful MCP connections
 const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
@@ -36,6 +36,10 @@ app.get('/health', (c) => {
 // Auth routes (no API key required)
 app.route('/auth', authRouter);
 
+// G2 REST API for the Even Realities G2 plugin. The router applies its own
+// apiKeyAuth() middleware internally, so we mount it before /mcp/*.
+app.route('/api/g2', g2Router);
+
 // Origin validation middleware for /mcp
 app.use('/mcp/*', async (c, next) => {
   const origin = c.req.header('origin') ?? '';
@@ -49,18 +53,8 @@ app.use('/mcp/*', async (c, next) => {
   await next();
 });
 
-// API key middleware for /mcp
-app.use('/mcp/*', async (c, next) => {
-  if (!MCP_API_KEY) {
-    await next();
-    return;
-  }
-  const auth = c.req.header('authorization') ?? '';
-  if (auth !== `Bearer ${MCP_API_KEY}`) {
-    return c.text('Unauthorized', 401);
-  }
-  await next();
-});
+// API key middleware for /mcp (shared with /api/g2 via apiKeyAuth())
+app.use('/mcp/*', apiKeyAuth());
 
 // MCP Streamable HTTP transport
 app.all('/mcp', async (c) => {
