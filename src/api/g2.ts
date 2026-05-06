@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { cors } from 'hono/cors';
 import { apiKeyAuth } from '../middleware/api-key.js';
 import { getTokens } from '../db/queries.js';
 import { getClient, spotifyFetch } from '../services/spotify.js';
@@ -16,6 +17,12 @@ import { getFeedbackByRating, getAllExclusions } from '../db/queries.js';
  */
 export const g2Router = new Hono();
 
+g2Router.use('*', cors({
+  origin: (origin) => origin,
+  allowMethods: ['GET', 'POST', 'OPTIONS'],
+  allowHeaders: ['Authorization', 'Content-Type'],
+  maxAge: 600,
+}));
 g2Router.use('*', apiKeyAuth());
 
 // Helper: short-circuit if Spotify is not connected (no tokens stored).
