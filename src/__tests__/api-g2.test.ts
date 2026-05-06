@@ -166,6 +166,7 @@ describe('POST /api/g2/play-pause', () => {
     const client = makeClientStub();
     client.player.getPlaybackState.mockResolvedValue({ is_playing: true });
     getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response(null, { status: 204 }));
 
     const app = buildApp();
     const res = await app.request('/api/g2/play-pause', {
@@ -174,13 +175,14 @@ describe('POST /api/g2/play-pause', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ isPlaying: false });
-    expect(client.player.pausePlayback).toHaveBeenCalledOnce();
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/pause', { method: 'PUT' });
   });
 
   it('resumes when currently paused', async () => {
     const client = makeClientStub();
     client.player.getPlaybackState.mockResolvedValue({ is_playing: false });
     getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response(null, { status: 204 }));
 
     const app = buildApp();
     const res = await app.request('/api/g2/play-pause', {
@@ -189,14 +191,13 @@ describe('POST /api/g2/play-pause', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ isPlaying: true });
-    expect(client.player.startResumePlayback).toHaveBeenCalledOnce();
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/play', { method: 'PUT' });
   });
 });
 
 describe('POST /api/g2/next', () => {
   it('skips to the next track and returns ok', async () => {
-    const client = makeClientStub();
-    getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response(null, { status: 204 }));
 
     const app = buildApp();
     const res = await app.request('/api/g2/next', {
@@ -205,14 +206,13 @@ describe('POST /api/g2/next', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(client.player.skipToNext).toHaveBeenCalledOnce();
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/next', { method: 'POST' });
   });
 });
 
 describe('POST /api/g2/prev', () => {
   it('skips to the previous track and returns ok', async () => {
-    const client = makeClientStub();
-    getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response(null, { status: 204 }));
 
     const app = buildApp();
     const res = await app.request('/api/g2/prev', {
@@ -221,7 +221,7 @@ describe('POST /api/g2/prev', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(client.player.skipToPrevious).toHaveBeenCalledOnce();
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/previous', { method: 'POST' });
   });
 });
 
@@ -233,6 +233,7 @@ describe('POST /api/g2/like', () => {
       item: { id: 'current-id', name: 'X', type: 'track', artists: [], album: { name: '' } },
     });
     getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response(null, { status: 200 }));
 
     const app = buildApp();
     const res = await app.request('/api/g2/like', {
@@ -241,12 +242,13 @@ describe('POST /api/g2/like', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, trackId: 'current-id' });
-    expect(client.currentUser.tracks.saveTracks).toHaveBeenCalledWith(['current-id']);
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/tracks?ids=current-id', { method: 'PUT' });
   });
 
   it('uses the trackId from the request body when supplied', async () => {
     const client = makeClientStub();
     getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response(null, { status: 200 }));
 
     const app = buildApp();
     const res = await app.request('/api/g2/like', {
@@ -256,7 +258,7 @@ describe('POST /api/g2/like', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, trackId: 'explicit-id' });
-    expect(client.currentUser.tracks.saveTracks).toHaveBeenCalledWith(['explicit-id']);
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/tracks?ids=explicit-id', { method: 'PUT' });
     // Should NOT have polled for the current track since trackId was provided
     expect(client.player.getCurrentlyPlayingTrack).not.toHaveBeenCalled();
   });

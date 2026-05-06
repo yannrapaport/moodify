@@ -95,13 +95,13 @@ g2Router.post('/play-pause', async (c) => {
     const state = await client.player.getPlaybackState();
     const currentlyPlaying = !!state?.is_playing;
 
+    // Use raw fetch — the SDK chokes parsing Spotify's 204/empty-body responses
+    // for player control endpoints.
     if (currentlyPlaying) {
-      await client.player.pausePlayback('');
+      await spotifyFetch('/me/player/pause', { method: 'PUT' });
       return c.json({ isPlaying: false });
     }
-
-    // Resume — startResumePlayback with no uri/context resumes current track
-    await client.player.startResumePlayback('');
+    await spotifyFetch('/me/player/play', { method: 'PUT' });
     return c.json({ isPlaying: true });
   } catch (e) {
     return errorResponse(c, e);
@@ -115,8 +115,7 @@ g2Router.post('/next', async (c) => {
   }
 
   try {
-    const client = await getClient();
-    await client.player.skipToNext('');
+    await spotifyFetch('/me/player/next', { method: 'POST' });
     return c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
@@ -130,8 +129,7 @@ g2Router.post('/prev', async (c) => {
   }
 
   try {
-    const client = await getClient();
-    await client.player.skipToPrevious('');
+    await spotifyFetch('/me/player/previous', { method: 'POST' });
     return c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
@@ -165,7 +163,8 @@ g2Router.post('/like', async (c) => {
       trackId = item.id as string;
     }
 
-    await client.currentUser.tracks.saveTracks([trackId]);
+    // Raw fetch — SDK saveTracks chokes on Spotify's empty 200 response.
+    await spotifyFetch(`/me/tracks?ids=${encodeURIComponent(trackId)}`, { method: 'PUT' });
     return c.json({ ok: true, trackId });
   } catch (e) {
     return errorResponse(c, e);
