@@ -115,14 +115,17 @@ describe('503 spotify_not_connected', () => {
 // ── Endpoint happy paths ─────────────────────────────────────────────────────
 
 describe('GET /api/g2/now-playing', () => {
-  it('returns track info with isLiked + coverUrl when something is playing', async () => {
+  it('returns track info with isLiked + coverUrl + progress when something is playing', async () => {
     const client = makeClientStub();
-    client.player.getCurrentlyPlayingTrack.mockResolvedValue({
+    client.player.getPlaybackState.mockResolvedValue({
       is_playing: true,
+      progress_ms: 12345,
+      device: { id: 'd1' },
       item: {
         id: 't123',
         name: 'Strobe',
         type: 'track',
+        duration_ms: 600000,
         artists: [{ name: 'Deadmau5' }],
         album: {
           name: 'For Lack of a Better Name',
@@ -152,17 +155,22 @@ describe('GET /api/g2/now-playing', () => {
         isLiked: true,
         coverUrl: 'https://i.scdn.co/image/mid.jpg',
       },
+      progressMs: 12345,
+      durationMs: 600000,
     });
   });
 
   it('returns coverUrl=null when album has no images', async () => {
     const client = makeClientStub();
-    client.player.getCurrentlyPlayingTrack.mockResolvedValue({
+    client.player.getPlaybackState.mockResolvedValue({
       is_playing: true,
+      progress_ms: 0,
+      device: { id: 'd1' },
       item: {
         id: 't1',
         name: 'X',
         type: 'track',
+        duration_ms: 1000,
         artists: [],
         album: { name: 'Y', images: [] },
       },
@@ -178,9 +186,9 @@ describe('GET /api/g2/now-playing', () => {
     expect(body.track.coverUrl).toBeNull();
   });
 
-  it('returns track:null when nothing is playing', async () => {
+  it('returns track:null + null progress when nothing is playing', async () => {
     const client = makeClientStub();
-    client.player.getCurrentlyPlayingTrack.mockResolvedValue(null);
+    client.player.getPlaybackState.mockResolvedValue(null);
     getClient.mockResolvedValue(client);
 
     const app = buildApp();
@@ -188,14 +196,19 @@ describe('GET /api/g2/now-playing', () => {
       headers: { authorization: AUTH },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ isPlaying: false, track: null });
+    expect(await res.json()).toEqual({
+      isPlaying: false,
+      track: null,
+      progressMs: null,
+      durationMs: null,
+    });
   });
 });
 
 describe('POST /api/g2/play-pause', () => {
   it('pauses when currently playing', async () => {
     const client = makeClientStub();
-    client.player.getPlaybackState.mockResolvedValue({ is_playing: true });
+    client.player.getPlaybackState.mockResolvedValue({ is_playing: true, device: { id: 'd1' } });
     getClient.mockResolvedValue(client);
     spotifyFetch.mockResolvedValue(new Response(null, { status: 204 }));
 
@@ -211,7 +224,7 @@ describe('POST /api/g2/play-pause', () => {
 
   it('resumes when currently paused', async () => {
     const client = makeClientStub();
-    client.player.getPlaybackState.mockResolvedValue({ is_playing: false });
+    client.player.getPlaybackState.mockResolvedValue({ is_playing: false, device: { id: 'd1' } });
     getClient.mockResolvedValue(client);
     spotifyFetch.mockResolvedValue(new Response(null, { status: 204 }));
 
@@ -223,6 +236,123 @@ describe('POST /api/g2/play-pause', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ isPlaying: true });
     expect(spotifyFetch).toHaveBeenCalledWith('/me/player/play', { method: 'PUT' });
+  });
+
+  it('transfers playback to first available device when no active device', async () => {
+    const client = makeClientStub();
+    client.player.getPlaybackState.mockResolvedValue(null);
+    getClient.mockResolvedValue(client);
+    // First call: GET /me/player/devices, second: PUT /me/player (transfer)
+    spotifyFetch
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ devices: [{ id: 'phone-id', is_active: false }] }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const app = buildApp();
+    const res = await app.request('/api/g2/play-pause', {
+      method: 'POST',
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ isPlaying: true });
+    expect(spotifyFetch).toHaveBeenNthCalledWith(1, '/me/player/devices', { method: 'GET' });
+    expect(spotifyFetch).toHaveBeenNthCalledWith(2, '/me/player', expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify({ device_ids: ['phone-id'], play: true }),
+    }));
+  });
+
+  it('returns 503 no_device when no device is available', async () => {
+    const client = makeClientStub();
+    client.player.getPlaybackState.mockResolvedValue(null);
+    getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(
+      new Response(JSON.stringify({ devices: [] }), { status: 200 }),
+    );
+
+    const app = buildApp();
+    const res = await app.request('/api/g2/play-pause', {
+      method: 'POST',
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'no_device' });
+  });
+});
+
+describe('GET /api/g2/playlists', () => {
+  it('returns the user\'s playlists, mapped to the G2 shape', async () => {
+    spotifyFetch.mockResolvedValue(new Response(JSON.stringify({
+      items: [
+        { id: 'p1', name: 'Chill', uri: 'spotify:playlist:p1', tracks: { total: 42 } },
+        { id: 'p2', name: 'Workout', uri: 'spotify:playlist:p2', tracks: { total: 17 } },
+      ],
+    }), { status: 200 }));
+
+    const app = buildApp();
+    const res = await app.request('/api/g2/playlists', {
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      playlists: [
+        { id: 'p1', name: 'Chill', uri: 'spotify:playlist:p1', trackCount: 42 },
+        { id: 'p2', name: 'Workout', uri: 'spotify:playlist:p2', trackCount: 17 },
+      ],
+    });
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/playlists?limit=20', { method: 'GET' });
+  });
+
+  it('returns 500 when Spotify responds non-OK', async () => {
+    spotifyFetch.mockResolvedValue(new Response('forbidden', { status: 403 }));
+    const app = buildApp();
+    const res = await app.request('/api/g2/playlists', {
+      headers: { authorization: AUTH },
+    });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'spotify_403' });
+  });
+});
+
+describe('POST /api/g2/play-context', () => {
+  it('starts playback on the given context_uri', async () => {
+    spotifyFetch.mockResolvedValue(new Response(null, { status: 204 }));
+    const app = buildApp();
+    const res = await app.request('/api/g2/play-context', {
+      method: 'POST',
+      headers: { authorization: AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify({ contextUri: 'spotify:playlist:p1' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/play', {
+      method: 'PUT',
+      body: JSON.stringify({ context_uri: 'spotify:playlist:p1' }),
+    });
+  });
+
+  it('returns 400 when contextUri is missing', async () => {
+    const app = buildApp();
+    const res = await app.request('/api/g2/play-context', {
+      method: 'POST',
+      headers: { authorization: AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'missing_contextUri' });
+  });
+
+  it('returns 503 no_device when Spotify replies 404', async () => {
+    spotifyFetch.mockResolvedValue(new Response('no active device', { status: 404 }));
+    const app = buildApp();
+    const res = await app.request('/api/g2/play-context', {
+      method: 'POST',
+      headers: { authorization: AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify({ contextUri: 'spotify:playlist:p1' }),
+    });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'no_device' });
   });
 });
 

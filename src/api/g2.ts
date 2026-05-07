@@ -47,11 +47,14 @@ g2Router.get('/now-playing', async (c) => {
 
   try {
     const client = await getClient();
-    const state = await client.player.getCurrentlyPlayingTrack();
+    // getPlaybackState() (vs getCurrentlyPlayingTrack) is the canonical source
+    // for progress_ms — it stays accurate while paused and updates more
+    // reliably across device transfers.
+    const state = await client.player.getPlaybackState() as any;
 
     // No active playback context, or no track in the slot
     if (!state || !state.item) {
-      return c.json({ isPlaying: false, track: null });
+      return c.json({ isPlaying: false, track: null, progressMs: null, durationMs: null });
     }
 
     const item = state.item as any; // SDK union: TrackItem = Track | Episode
@@ -80,6 +83,9 @@ g2Router.get('/now-playing', async (c) => {
       coverUrl = best?.url ?? null;
     }
 
+    const progressMs = typeof state.progress_ms === 'number' ? state.progress_ms : null;
+    const durationMs = typeof item.duration_ms === 'number' ? item.duration_ms : null;
+
     return c.json({
       isPlaying: !!state.is_playing,
       track: {
@@ -90,6 +96,8 @@ g2Router.get('/now-playing', async (c) => {
         isLiked,
         coverUrl,
       },
+      progressMs,
+      durationMs,
     });
   } catch (e) {
     return errorResponse(c, e);
@@ -97,6 +105,13 @@ g2Router.get('/now-playing', async (c) => {
 });
 
 // ── POST /play-pause ─────────────────────────────────────────────────────────
+//
+// Three-way handling:
+//  1. State exists & is_playing=true  -> pause normally
+//  2. State exists & is_playing=false -> resume normally
+//  3. No state OR state.device is null -> "no active device" path:
+//     fetch /me/player/devices, transfer playback to the first available one
+//     with play=true. If no device is available, return 503 {error:'no_device'}.
 g2Router.post('/play-pause', async (c) => {
   if (!ensureSpotifyConnected().connected) {
     return c.json({ error: 'spotify_not_connected' }, 503);
@@ -104,8 +119,29 @@ g2Router.post('/play-pause', async (c) => {
 
   try {
     const client = await getClient();
-    const state = await client.player.getPlaybackState();
-    const currentlyPlaying = !!state?.is_playing;
+    const state = await client.player.getPlaybackState() as any;
+    const hasActiveDevice = !!(state && state.device);
+
+    if (!hasActiveDevice) {
+      // No active device path — try transferring to any known device.
+      const res = await spotifyFetch('/me/player/devices', { method: 'GET' });
+      if (!res.ok) {
+        return c.json({ error: 'no_device' }, 503);
+      }
+      const data = await res.json() as { devices?: Array<{ id: string; is_active: boolean }> };
+      const devices = data.devices ?? [];
+      if (devices.length === 0) {
+        return c.json({ error: 'no_device' }, 503);
+      }
+      const target = devices[0];
+      await spotifyFetch('/me/player', {
+        method: 'PUT',
+        body: JSON.stringify({ device_ids: [target.id], play: true }),
+      });
+      return c.json({ isPlaying: true });
+    }
+
+    const currentlyPlaying = !!state.is_playing;
 
     // Use raw fetch — the SDK chokes parsing Spotify's 204/empty-body responses
     // for player control endpoints.
@@ -252,6 +288,68 @@ g2Router.post('/surprise-me', async (c) => {
     });
 
     return c.json({ ok: true, track: { name: firstName, artists: firstArtists } });
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+// ── GET /playlists ───────────────────────────────────────────────────────────
+// Lists the user's playlists (up to 20). Source: GET /me/playlists.
+// Returns an array of {id, name, uri, trackCount}.
+g2Router.get('/playlists', async (c) => {
+  if (!ensureSpotifyConnected().connected) {
+    return c.json({ error: 'spotify_not_connected' }, 503);
+  }
+  try {
+    const res = await spotifyFetch('/me/playlists?limit=20', { method: 'GET' });
+    if (!res.ok) {
+      return c.json({ error: `spotify_${res.status}` }, 500);
+    }
+    const data = await res.json() as { items?: Array<any> };
+    const playlists = (data.items ?? []).map((p: any) => ({
+      id: p.id as string,
+      name: (p.name ?? '') as string,
+      uri: p.uri as string,
+      trackCount: typeof p.tracks?.total === 'number' ? p.tracks.total : 0,
+    }));
+    return c.json({ playlists });
+  } catch (e) {
+    return errorResponse(c, e);
+  }
+});
+
+// ── POST /play-context ───────────────────────────────────────────────────────
+// Body: { contextUri: string }  e.g. "spotify:playlist:abc123" or
+// "spotify:album:..." — anything Spotify accepts as context_uri.
+g2Router.post('/play-context', async (c) => {
+  if (!ensureSpotifyConnected().connected) {
+    return c.json({ error: 'spotify_not_connected' }, 503);
+  }
+
+  let contextUri: string | undefined;
+  try {
+    const body = await c.req.json<{ contextUri?: string }>();
+    contextUri = body?.contextUri;
+  } catch {
+    // no body / invalid JSON
+  }
+  if (!contextUri || typeof contextUri !== 'string') {
+    return c.json({ error: 'missing_contextUri' }, 400);
+  }
+
+  try {
+    const res = await spotifyFetch('/me/player/play', {
+      method: 'PUT',
+      body: JSON.stringify({ context_uri: contextUri }),
+    });
+    // 404 with "NO_ACTIVE_DEVICE" comes through here on a cold device.
+    if (res.status === 404) {
+      return c.json({ error: 'no_device' }, 503);
+    }
+    if (!res.ok && res.status !== 204) {
+      return c.json({ error: `spotify_${res.status}` }, 500);
+    }
+    return c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
   }
