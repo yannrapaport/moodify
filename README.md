@@ -61,3 +61,12 @@ docker compose up -d
 npm test        # run 22 unit tests
 npm run build   # compile TypeScript
 ```
+
+## Support
+
+If Moodify is useful to you, you can support its development on [Patreon](https://www.patreon.com/yannrapaport). It covers the VPS that runs the demo instance and helps me keep building open-source tools in my spare time.
+
+## License
+
+[MIT](LICENSE) — © Yann Rapaport
+
