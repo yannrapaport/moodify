@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { randomUUID } from 'crypto';
@@ -22,6 +23,14 @@ const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
 const servers = new Map<string, ReturnType<typeof createMcpServer>>();
 
 const app = new Hono();
+
+// CORS for the public probe routes (/health, /.well-known/*). The G2 plugin's
+// in-WebView config form fetches /health to verify the URL points at a moodify
+// before persisting credentials, so the route needs to respond to cross-origin
+// preflights. /mcp/* keeps its own stricter origin check below.
+const publicCors = cors({ origin: (origin) => origin });
+app.use('/health', publicCors);
+app.use('/.well-known/*', publicCors);
 
 // MCP SDK OAuth discovery — return JSON 404 so the SDK doesn't crash parsing plain text
 app.get('/.well-known/oauth-authorization-server', (c) => c.json({ error: 'not_supported' }, 404));
