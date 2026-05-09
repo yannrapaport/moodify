@@ -242,27 +242,30 @@ g2Router.post('/surprise-me', async (c) => {
     let firstArtists: string[] = [];
 
     if (isColdStart) {
-      // Pick from user's top tracks, filtered by exclusions.
+      // Pick randomly from eligible top tracks (not always index 0).
       const client = await getClient();
       const top = await client.currentUser.topItems('tracks', 'short_term', 10);
       const exclusions = getAllExclusions();
       const excludedArtists = new Set(exclusions.filter((e) => e.type === 'artist').map((e) => e.value));
       const excludedTracks = new Set(exclusions.filter((e) => e.type === 'track').map((e) => e.value));
 
-      const candidate = top.items.find((t) =>
+      const eligible = top.items.filter((t) =>
         !excludedTracks.has(t.id) && !t.artists.some((a) => excludedArtists.has(a.id)),
       );
-      if (!candidate) {
+      if (!eligible.length) {
         return c.json({ error: 'no_suitable_tracks' }, 500);
       }
+      const candidate = eligible[Math.floor(Math.random() * eligible.length)];
       firstUri = candidate.uri;
       firstName = candidate.name;
       firstArtists = candidate.artists.map((a) => a.name);
     } else {
-      const top = liked[0];
-      firstUri = `spotify:track:${top.trackId}`;
-      firstName = top.trackName;
-      firstArtists = [top.artistName];
+      // Pick randomly from up to 20 liked tracks (not always the same #1).
+      const pool = liked.slice(0, 20);
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      firstUri = `spotify:track:${pick.trackId}`;
+      firstName = pick.trackName;
+      firstArtists = [pick.artistName];
     }
 
     // Start playback (track URI → uris payload, otherwise context_uri)
