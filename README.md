@@ -2,6 +2,33 @@
 
 A Spotify MCP server with a personal recommendation engine. Control Spotify and discover music tailored to your evolving taste profile — all through Claude.
 
+Also powers the **[Moodify Remote](https://github.com/yannrapaport/spotify-g2)** Even Realities G2 plugin (Spotify control from your smart glasses + R1 ring).
+
+## Deploy in 5 minutes
+
+### Option A — Railway (no VPS needed, free tier available)
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/yannrapaport/moodify)
+
+1. Click the button → sign in to Railway → **Deploy**
+2. Set environment variables in Railway dashboard:
+   - `SPOTIFY_CLIENT_ID` — from [developer.spotify.com](https://developer.spotify.com/dashboard)
+   - `SPOTIFY_REDIRECT_URI` — your Railway app URL + `/auth/callback` (e.g. `https://moodify-xxx.railway.app/auth/callback`)
+   - `MCP_API_KEY` — run `openssl rand -hex 32` to generate one
+3. Add the redirect URI to your Spotify app settings
+4. Visit `https://your-app.railway.app/auth/login` to link your Spotify account
+5. Done — use the URL and MCP_API_KEY in Moodify Remote
+
+### Option B — Self-hosted VPS (full control)
+
+```bash
+git clone https://github.com/yannrapaport/moodify
+cd moodify
+./scripts/install.sh
+```
+
+The install script sets up Docker + Caddy with HTTPS automatically.
+
 ## Features
 
 - **Surprise Me** — plays a track based on your taste profile and queues more in the background
