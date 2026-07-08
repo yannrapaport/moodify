@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
-import { apiKeyAuth } from '../middleware/api-key.js';
+import { userApiKeyAuth } from '../middleware/api-key.js';
 import { getTokens } from '../db/queries.js';
 import { getClient, spotifyFetch } from '../services/spotify.js';
 import { buildTasteProfile, getRecommendations, filterExclusions } from '../services/recommendation.js';
@@ -9,13 +9,11 @@ import { getFeedbackByRating, getAllExclusions } from '../db/queries.js';
 /**
  * REST sub-router for the Even Realities G2 plugin.
  *
- * Mounted at /api/g2 on the main Hono app. Reuses the existing Spotify
- * service layer (token storage, refresh logic, recommendation engine) —
- * no duplication of the OAuth flow or HTTP plumbing.
- *
- * Auth: Bearer ${MCP_API_KEY} (same scheme as /mcp/*).
+ * Mounted at /api/g2 on the main Hono app. Auth: `Authorization: Bearer
+ * <user-api-key>` — the API key resolves to a user, scoping all operations.
  */
-export const g2Router = new Hono();
+type G2Env = { Variables: { userId: number } };
+export const g2Router = new Hono<G2Env>();
 
 g2Router.use('*', cors({
   origin: (origin) => origin,
@@ -23,11 +21,11 @@ g2Router.use('*', cors({
   allowHeaders: ['Authorization', 'Content-Type'],
   maxAge: 600,
 }));
-g2Router.use('*', apiKeyAuth());
+g2Router.use('*', userApiKeyAuth());
 
-// Helper: short-circuit if Spotify is not connected (no tokens stored).
-function ensureSpotifyConnected(): { connected: false } | { connected: true } {
-  return getTokens() === null ? { connected: false } : { connected: true };
+// Helper: short-circuit if Spotify is not connected for this user (no tokens).
+function ensureSpotifyConnected(userId: number): boolean {
+  return getTokens(userId) !== null;
 }
 
 // Centralized error mapping. 503 for "not connected", 500 for everything else.
@@ -41,12 +39,13 @@ function errorResponse(c: Context, e: unknown) {
 
 // ── GET /now-playing ─────────────────────────────────────────────────────────
 g2Router.get('/now-playing', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
 
   try {
-    const client = await getClient();
+    const client = await getClient(userId);
     // getPlaybackState() (vs getCurrentlyPlayingTrack) is the canonical source
     // for progress_ms — it stays accurate while paused and updates more
     // reliably across device transfers.
@@ -113,18 +112,19 @@ g2Router.get('/now-playing', async (c) => {
 //     fetch /me/player/devices, transfer playback to the first available one
 //     with play=true. If no device is available, return 503 {error:'no_device'}.
 g2Router.post('/play-pause', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
 
   try {
-    const client = await getClient();
+    const client = await getClient(userId);
     const state = await client.player.getPlaybackState() as any;
     const hasActiveDevice = !!(state && state.device);
 
     if (!hasActiveDevice) {
       // No active device path — try transferring to any known device.
-      const res = await spotifyFetch('/me/player/devices', { method: 'GET' });
+      const res = await spotifyFetch(userId, '/me/player/devices', { method: 'GET' });
       if (!res.ok) {
         return c.json({ error: 'no_device' }, 503);
       }
@@ -134,7 +134,7 @@ g2Router.post('/play-pause', async (c) => {
         return c.json({ error: 'no_device' }, 503);
       }
       const target = devices[0];
-      await spotifyFetch('/me/player', {
+      await spotifyFetch(userId, '/me/player', {
         method: 'PUT',
         body: JSON.stringify({ device_ids: [target.id], play: true }),
       });
@@ -146,10 +146,10 @@ g2Router.post('/play-pause', async (c) => {
     // Use raw fetch — the SDK chokes parsing Spotify's 204/empty-body responses
     // for player control endpoints.
     if (currentlyPlaying) {
-      await spotifyFetch('/me/player/pause', { method: 'PUT' });
+      await spotifyFetch(userId, '/me/player/pause', { method: 'PUT' });
       return c.json({ isPlaying: false });
     }
-    await spotifyFetch('/me/player/play', { method: 'PUT' });
+    await spotifyFetch(userId, '/me/player/play', { method: 'PUT' });
     return c.json({ isPlaying: true });
   } catch (e) {
     return errorResponse(c, e);
@@ -158,12 +158,13 @@ g2Router.post('/play-pause', async (c) => {
 
 // ── POST /next ───────────────────────────────────────────────────────────────
 g2Router.post('/next', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
 
   try {
-    await spotifyFetch('/me/player/next', { method: 'POST' });
+    await spotifyFetch(userId, '/me/player/next', { method: 'POST' });
     return c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
@@ -172,12 +173,13 @@ g2Router.post('/next', async (c) => {
 
 // ── POST /prev ───────────────────────────────────────────────────────────────
 g2Router.post('/prev', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
 
   try {
-    await spotifyFetch('/me/player/previous', { method: 'POST' });
+    await spotifyFetch(userId, '/me/player/previous', { method: 'POST' });
     return c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
@@ -186,7 +188,8 @@ g2Router.post('/prev', async (c) => {
 
 // ── POST /like ───────────────────────────────────────────────────────────────
 g2Router.post('/like', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
 
@@ -200,7 +203,7 @@ g2Router.post('/like', async (c) => {
       // No body / invalid JSON — fine, we'll resolve from playback state.
     }
 
-    const client = await getClient();
+    const client = await getClient(userId);
 
     if (!trackId) {
       const state = await client.player.getCurrentlyPlayingTrack();
@@ -212,7 +215,7 @@ g2Router.post('/like', async (c) => {
     }
 
     // Raw fetch — SDK saveTracks chokes on Spotify's empty 200 response.
-    await spotifyFetch(`/me/tracks?ids=${encodeURIComponent(trackId)}`, { method: 'PUT' });
+    await spotifyFetch(userId, `/me/tracks?ids=${encodeURIComponent(trackId)}`, { method: 'PUT' });
     return c.json({ ok: true, trackId });
   } catch (e) {
     return errorResponse(c, e);
@@ -223,7 +226,8 @@ g2Router.post('/like', async (c) => {
 // REST equivalent of the MCP `surprise_me` tool. Picks a track via the existing
 // recommendation engine, starts playback, and queues 7 more in the background.
 g2Router.post('/surprise-me', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
 
@@ -234,7 +238,7 @@ g2Router.post('/surprise-me', async (c) => {
       context = body?.context;
     } catch { /* no body — fine */ }
 
-    const liked = getFeedbackByRating(1);
+    const liked = getFeedbackByRating(userId, 1);
     const isColdStart = liked.length === 0;
 
     let firstUri = '';
@@ -243,9 +247,9 @@ g2Router.post('/surprise-me', async (c) => {
 
     if (isColdStart) {
       // Pick randomly from eligible top tracks (not always index 0).
-      const client = await getClient();
+      const client = await getClient(userId);
       const top = await client.currentUser.topItems('tracks', 'short_term', 10);
-      const exclusions = getAllExclusions();
+      const exclusions = getAllExclusions(userId);
       const excludedArtists = new Set(exclusions.filter((e) => e.type === 'artist').map((e) => e.value));
       const excludedTracks = new Set(exclusions.filter((e) => e.type === 'track').map((e) => e.value));
 
@@ -270,7 +274,7 @@ g2Router.post('/surprise-me', async (c) => {
 
     // Start playback (track URI → uris payload, otherwise context_uri)
     const playBody = firstUri.includes(':track:') ? { uris: [firstUri] } : { context_uri: firstUri };
-    await spotifyFetch('/me/player/play', {
+    await spotifyFetch(userId, '/me/player/play', {
       method: 'PUT',
       body: JSON.stringify(playBody),
     });
@@ -278,12 +282,12 @@ g2Router.post('/surprise-me', async (c) => {
     // Fire-and-forget queue building. Mirrors the MCP tool behavior.
     setImmediate(async () => {
       try {
-        const profile = buildTasteProfile();
-        const recs = await getRecommendations(profile, context);
-        const filtered = await filterExclusions(recs);
+        const profile = buildTasteProfile(userId);
+        const recs = await getRecommendations(userId, profile, context);
+        const filtered = await filterExclusions(userId, recs);
         const toQueue = filtered.filter((t) => t.uri !== firstUri).slice(0, 7);
         for (const track of toQueue) {
-          await spotifyFetch('/me/player/queue?' + new URLSearchParams({ uri: track.uri }), { method: 'POST' });
+          await spotifyFetch(userId, '/me/player/queue?' + new URLSearchParams({ uri: track.uri }), { method: 'POST' });
         }
       } catch (err) {
         console.error('[g2 surprise-me queue]', err);
@@ -300,11 +304,12 @@ g2Router.post('/surprise-me', async (c) => {
 // Lists the user's playlists (up to 20). Source: GET /me/playlists.
 // Returns an array of {id, name, uri, trackCount}.
 g2Router.get('/playlists', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
   try {
-    const res = await spotifyFetch('/me/playlists?limit=20', { method: 'GET' });
+    const res = await spotifyFetch(userId, '/me/playlists?limit=20', { method: 'GET' });
     if (!res.ok) {
       return c.json({ error: `spotify_${res.status}` }, 500);
     }
@@ -325,7 +330,8 @@ g2Router.get('/playlists', async (c) => {
 // Body: { contextUri: string }  e.g. "spotify:playlist:abc123" or
 // "spotify:album:..." — anything Spotify accepts as context_uri.
 g2Router.post('/play-context', async (c) => {
-  if (!ensureSpotifyConnected().connected) {
+  const userId = c.get('userId');
+  if (!ensureSpotifyConnected(userId)) {
     return c.json({ error: 'spotify_not_connected' }, 503);
   }
 
@@ -341,7 +347,7 @@ g2Router.post('/play-context', async (c) => {
   }
 
   try {
-    const res = await spotifyFetch('/me/player/play', {
+    const res = await spotifyFetch(userId, '/me/player/play', {
       method: 'PUT',
       body: JSON.stringify({ context_uri: contextUri }),
     });

@@ -51,9 +51,9 @@ function applyMoodContext(profile: TasteProfile, context?: string): TasteProfile
 
 // ── Taste profile ─────────────────────────────────────────────────────────────
 
-export function buildTasteProfile(): TasteProfile {
-  const liked = getFeedbackByRating(1);
-  const disliked = getFeedbackByRating(-1);
+export function buildTasteProfile(userId: number): TasteProfile {
+  const liked = getFeedbackByRating(userId, 1);
+  const disliked = getFeedbackByRating(userId, -1);
 
   const allIds = [...liked.map((f) => f.trackId), ...disliked.map((f) => f.trackId)];
   const featuresMap = new Map(getAudioFeaturesForIds(allIds).map((f) => [f.trackId, f]));
@@ -93,18 +93,18 @@ export function buildTasteProfile(): TasteProfile {
 
 // ── Recommendations ───────────────────────────────────────────────────────────
 
-export async function getRecommendations(profile: TasteProfile, context?: string): Promise<Track[]> {
+export async function getRecommendations(userId: number, profile: TasteProfile, context?: string): Promise<Track[]> {
   const adjusted = applyMoodContext(profile, context);
-  const client = await getClient();
+  const client = await getClient(userId);
 
   // Get seed tracks from liked feedback (top 5 most recent)
-  const liked = getFeedbackByRating(1).slice(0, 5);
+  const liked = getFeedbackByRating(userId, 1).slice(0, 5);
   let seedTracks: string[] = liked.map((f) => f.trackId);
 
   // Cold start: use user's top tracks (filtered by exclusions)
   if (seedTracks.length === 0) {
     const top = await client.currentUser.topItems('tracks', 'short_term', 10);
-    const exclusions = getAllExclusions();
+    const exclusions = getAllExclusions(userId);
     const excludedArtists = new Set(exclusions.filter((e) => e.type === 'artist').map((e) => e.value));
     const excludedTracks = new Set(exclusions.filter((e) => e.type === 'track').map((e) => e.value));
 
@@ -132,8 +132,8 @@ export async function getRecommendations(profile: TasteProfile, context?: string
 
 // ── Exclusion filter ──────────────────────────────────────────────────────────
 
-export async function filterExclusions(tracks: Track[]): Promise<Track[]> {
-  const exclusions = getAllExclusions();
+export async function filterExclusions(userId: number, tracks: Track[]): Promise<Track[]> {
+  const exclusions = getAllExclusions(userId);
   const excludedArtists = new Set(exclusions.filter((e) => e.type === 'artist').map((e) => e.value));
   const excludedTracks = new Set(exclusions.filter((e) => e.type === 'track').map((e) => e.value));
   const excludedGenres = new Set(exclusions.filter((e) => e.type === 'genre').map((e) => e.value.toLowerCase()));

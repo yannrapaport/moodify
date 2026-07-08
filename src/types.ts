@@ -4,6 +4,15 @@ export interface SpotifyTokens {
   expiresAt: number; // unix timestamp in seconds
 }
 
+export interface User {
+  id: number;
+  spotifyUserId: string;
+  displayName: string | null;
+  email: string | null;
+  apiKeyHash: string;
+  createdAt: number;
+}
+
 export interface Feedback {
   trackId: string;
   trackName: string;

@@ -4,14 +4,16 @@ import { getTokens, saveTokens } from '../db/queries.js';
 const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID!;
 const TOKEN_ENDPOINT = 'https://accounts.spotify.com/api/token';
 
-// Concurrency guard: prevents simultaneous refresh races
-let refreshPromise: Promise<void> | null = null;
+// Concurrency guard, per user: prevents simultaneous refresh races for the same
+// account. Different users get independent promises.
+const refreshPromises = new Map<number, Promise<void>>();
 
-async function refreshTokens(): Promise<void> {
-  if (refreshPromise) return refreshPromise;
+async function refreshTokens(userId: number): Promise<void> {
+  const existing = refreshPromises.get(userId);
+  if (existing) return existing;
 
-  refreshPromise = (async () => {
-    const tokens = getTokens();
+  const promise = (async () => {
+    const tokens = getTokens(userId);
     if (!tokens?.refreshToken) throw new Error('No refresh token available — visit /auth/login');
 
     const body = new URLSearchParams({
@@ -31,29 +33,29 @@ async function refreshTokens(): Promise<void> {
     }
 
     const data = await res.json() as any;
-    saveTokens({
+    saveTokens(userId, {
       accessToken: data.access_token,
       refreshToken: data.refresh_token ?? tokens.refreshToken,
       expiresAt: Math.floor(Date.now() / 1000) + data.expires_in,
     });
   })().finally(() => {
-    // Always reset — even on failure — to prevent permanent deadlock
-    refreshPromise = null;
+    refreshPromises.delete(userId);
   });
 
-  return refreshPromise;
+  refreshPromises.set(userId, promise);
+  return promise;
 }
 
-export async function getClient(): Promise<SpotifyApi> {
-  const tokens = getTokens();
+export async function getClient(userId: number): Promise<SpotifyApi> {
+  const tokens = getTokens(userId);
   if (!tokens) throw new Error('Not authenticated — visit /auth/login');
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   if (tokens.expiresAt <= nowSeconds + 60) {
-    await refreshTokens();
+    await refreshTokens(userId);
   }
 
-  const current = getTokens()!;
+  const current = getTokens(userId)!;
   return SpotifyApi.withAccessToken(CLIENT_ID, {
     access_token: current.accessToken,
     token_type: 'Bearer',
@@ -63,14 +65,14 @@ export async function getClient(): Promise<SpotifyApi> {
 }
 
 /** Raw authenticated fetch for endpoints not covered by the SDK */
-export async function spotifyFetch(path: string, init?: RequestInit): Promise<Response> {
-  const tokens = getTokens();
+export async function spotifyFetch(userId: number, path: string, init?: RequestInit): Promise<Response> {
+  const tokens = getTokens(userId);
   if (!tokens) throw new Error('Not authenticated — visit /auth/login');
 
   const nowSeconds = Math.floor(Date.now() / 1000);
-  if (tokens.expiresAt <= nowSeconds + 60) await refreshTokens();
+  if (tokens.expiresAt <= nowSeconds + 60) await refreshTokens(userId);
 
-  const current = getTokens()!;
+  const current = getTokens(userId)!;
   return fetch(`https://api.spotify.com/v1${path}`, {
     ...init,
     headers: {
