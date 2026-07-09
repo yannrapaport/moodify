@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, spotifyFetch } from '../services/spotify.js';
+import { getClient, spotifyFetch } from './_admin.js';
 
 function text(t: string) {
   return { content: [{ type: 'text' as const, text: t }] };

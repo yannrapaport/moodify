@@ -2,11 +2,11 @@ import { getClient, spotifyFetch } from './spotify.js';
 import { getAudioFeatures, getAudioFeaturesForIds, upsertAudioFeatures } from '../db/queries.js';
 import type { AudioFeatures } from '../types.js';
 
-export async function fetchAudioFeatures(trackId: string): Promise<AudioFeatures | null> {
+export async function fetchAudioFeatures(userId: number, trackId: string): Promise<AudioFeatures | null> {
   const cached = getAudioFeatures(trackId);
   if (cached) return cached;
 
-  const client = await getClient();
+  const client = await getClient(userId);
   const data = await client.tracks.audioFeatures(trackId);
   if (!data) return null;
 
@@ -24,7 +24,7 @@ export async function fetchAudioFeatures(trackId: string): Promise<AudioFeatures
   return features;
 }
 
-export async function fetchBatchAudioFeatures(ids: string[]): Promise<AudioFeatures[]> {
+export async function fetchBatchAudioFeatures(userId: number, ids: string[]): Promise<AudioFeatures[]> {
   if (ids.length === 0) return [];
 
   // Check cache first
@@ -41,7 +41,7 @@ export async function fetchBatchAudioFeatures(ids: string[]): Promise<AudioFeatu
   // for tuple inputs, making the return type unusable. Raw fetch gives explicit typing.
   for (let i = 0; i < missing.length; i += 100) {
     const batch = missing.slice(i, i + 100);
-    const res = await spotifyFetch(`/audio-features?ids=${batch.join(',')}`);
+    const res = await spotifyFetch(userId, `/audio-features?ids=${batch.join(',')}`);
     if (!res.ok) continue;
 
     const data = await res.json() as {

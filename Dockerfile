@@ -15,6 +15,7 @@ FROM node:20-alpine3.20 AS runner
 WORKDIR /app
 
 # Ensure /app and /data are owned by node before switching user
+RUN apk upgrade --no-cache
 RUN chown node:node /app && mkdir -p /data && chown node:node /data
 
 # Run as non-root user

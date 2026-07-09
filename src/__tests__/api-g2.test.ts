@@ -8,6 +8,7 @@ vi.mock('../db/queries.js', () => ({
   getTokens: vi.fn(),
   getFeedbackByRating: vi.fn(() => []),
   getAllExclusions: vi.fn(() => []),
+  getUserByApiKey: vi.fn(),
 }));
 
 vi.mock('../services/spotify.js', () => ({
@@ -18,7 +19,7 @@ vi.mock('../services/spotify.js', () => ({
 vi.mock('../services/recommendation.js', () => ({
   buildTasteProfile: vi.fn(() => ({ energy: 0.5, valence: 0.5, danceability: 0.5, acousticness: 0.5, instrumentalness: 0.5, tempo: 0.5, sampleSize: 0 })),
   getRecommendations: vi.fn(async () => []),
-  filterExclusions: vi.fn(async (t: any[]) => t),
+  filterExclusions: vi.fn(async (_uid: number, t: any[]) => t),
 }));
 
 import { Hono } from 'hono';
@@ -29,14 +30,16 @@ import * as spotifyService from '../services/spotify.js';
 const getTokens = vi.mocked(queries.getTokens);
 const getFeedbackByRating = vi.mocked(queries.getFeedbackByRating);
 const getAllExclusions = vi.mocked(queries.getAllExclusions);
+const getUserByApiKey = vi.mocked(queries.getUserByApiKey);
 const getClient = vi.mocked(spotifyService.getClient);
 const spotifyFetch = vi.mocked(spotifyService.spotifyFetch);
 
 const TEST_KEY = 'test-api-key';
 const AUTH = `Bearer ${TEST_KEY}`;
+const TEST_USER_ID = 42;
 
 // Build a Hono app mounted exactly the same way as production: /api/g2/*
-// This exercises the router's internal apiKeyAuth() middleware.
+// This exercises the router's internal userApiKeyAuth() middleware.
 function buildApp() {
   const app = new Hono();
   app.route('/api/g2', g2Router);
@@ -70,13 +73,22 @@ function makeClientStub(over: Record<string, any> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env.MCP_API_KEY = TEST_KEY;
+  // The middleware resolves the bearer token to a user. Default: TEST_KEY maps
+  // to TEST_USER_ID. Tests that need to exercise the 401 path return null.
+  getUserByApiKey.mockImplementation((key: string) =>
+    key === TEST_KEY
+      ? {
+          id: TEST_USER_ID,
+          spotifyUserId: 'spot_test',
+          displayName: 'Test',
+          email: null,
+          apiKeyHash: 'hash',
+          createdAt: 0,
+        }
+      : null,
+  );
   // Default: tokens exist (Spotify connected). Tests can override.
   getTokens.mockReturnValue({ accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() / 1000 + 3600 });
-});
-
-afterEach(() => {
-  delete process.env.MCP_API_KEY;
 });
 
 // ── Auth tests ────────────────────────────────────────────────────────────────
@@ -88,7 +100,7 @@ describe('auth middleware', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 401 when the bearer token does not match MCP_API_KEY', async () => {
+  it('returns 401 when the bearer token does not match a user', async () => {
     const app = buildApp();
     const res = await app.request('/api/g2/now-playing', {
       headers: { authorization: 'Bearer wrong' },
@@ -219,7 +231,7 @@ describe('POST /api/g2/play-pause', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ isPlaying: false });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/pause', { method: 'PUT' });
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/player/pause', { method: 'PUT' });
   });
 
   it('resumes when currently paused', async () => {
@@ -235,7 +247,7 @@ describe('POST /api/g2/play-pause', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ isPlaying: true });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/play', { method: 'PUT' });
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/player/play', { method: 'PUT' });
   });
 
   it('transfers playback to first available device when no active device', async () => {
@@ -256,8 +268,8 @@ describe('POST /api/g2/play-pause', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ isPlaying: true });
-    expect(spotifyFetch).toHaveBeenNthCalledWith(1, '/me/player/devices', { method: 'GET' });
-    expect(spotifyFetch).toHaveBeenNthCalledWith(2, '/me/player', expect.objectContaining({
+    expect(spotifyFetch).toHaveBeenNthCalledWith(1, TEST_USER_ID, '/me/player/devices', { method: 'GET' });
+    expect(spotifyFetch).toHaveBeenNthCalledWith(2, TEST_USER_ID, '/me/player', expect.objectContaining({
       method: 'PUT',
       body: JSON.stringify({ device_ids: ['phone-id'], play: true }),
     }));
@@ -301,7 +313,7 @@ describe('GET /api/g2/playlists', () => {
         { id: 'p2', name: 'Workout', uri: 'spotify:playlist:p2', trackCount: 17 },
       ],
     });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/playlists?limit=20', { method: 'GET' });
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/playlists?limit=20', { method: 'GET' });
   });
 
   it('returns 500 when Spotify responds non-OK', async () => {
@@ -326,7 +338,7 @@ describe('POST /api/g2/play-context', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/play', {
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/player/play', {
       method: 'PUT',
       body: JSON.stringify({ context_uri: 'spotify:playlist:p1' }),
     });
@@ -367,7 +379,7 @@ describe('POST /api/g2/next', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/next', { method: 'POST' });
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/player/next', { method: 'POST' });
   });
 });
 
@@ -382,7 +394,7 @@ describe('POST /api/g2/prev', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/player/previous', { method: 'POST' });
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/player/previous', { method: 'POST' });
   });
 });
 
@@ -403,7 +415,7 @@ describe('POST /api/g2/like', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, trackId: 'current-id' });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/tracks?ids=current-id', { method: 'PUT' });
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/tracks?ids=current-id', { method: 'PUT' });
   });
 
   it('uses the trackId from the request body when supplied', async () => {
@@ -419,7 +431,7 @@ describe('POST /api/g2/like', () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, trackId: 'explicit-id' });
-    expect(spotifyFetch).toHaveBeenCalledWith('/me/tracks?ids=explicit-id', { method: 'PUT' });
+    expect(spotifyFetch).toHaveBeenCalledWith(TEST_USER_ID, '/me/tracks?ids=explicit-id', { method: 'PUT' });
     // Should NOT have polled for the current track since trackId was provided
     expect(client.player.getCurrentlyPlayingTrack).not.toHaveBeenCalled();
   });
@@ -507,6 +519,7 @@ describe('POST /api/g2/surprise-me', () => {
     });
     // Verify we called Spotify's play endpoint with the chosen URI
     expect(spotifyFetch).toHaveBeenCalledWith(
+      TEST_USER_ID,
       '/me/player/play',
       expect.objectContaining({ method: 'PUT' }),
     );

@@ -4,10 +4,11 @@ import { serve } from '@hono/node-server';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { randomUUID } from 'crypto';
 import { createMcpServer } from './mcp.js';
-import { authRouter } from './auth/handler.js';
-import { getTokens } from './db/queries.js';
-import { apiKeyAuth } from './middleware/api-key.js';
+import { authRouter, consumeOneShotKey } from './auth/handler.js';
+import { getTokens, getUserById } from './db/queries.js';
+import { adminApiKeyAuth } from './middleware/api-key.js';
 import { g2Router } from './api/g2.js';
+import { landingPage, dashboardPage } from './views.js';
 
 const ALLOWED_ORIGINS = new Set([
   'http://localhost',
@@ -22,7 +23,8 @@ if (process.env.ALLOWED_ORIGIN) {
 const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
 const servers = new Map<string, ReturnType<typeof createMcpServer>>();
 
-const app = new Hono();
+type AppEnv = { Variables: { userId: number } };
+const app = new Hono<AppEnv>();
 
 // CORS for the public probe routes (/health, /.well-known/*). The G2 plugin's
 // in-WebView config form fetches /health to verify the URL points at a moodify
@@ -32,13 +34,47 @@ const publicCors = cors({ origin: (origin) => origin });
 app.use('/health', publicCors);
 app.use('/.well-known/*', publicCors);
 
+// Landing page (public).
+app.get('/', (c) => c.html(landingPage()));
+
+// Dashboard — shown post-OAuth. Accepts ?token=<one-shot> (new user, shows API
+// key once) or ?welcome=back (returning user, no key to display).
+app.get('/dashboard', (c) => {
+  const token = c.req.query('token');
+  const welcomeBack = c.req.query('welcome') === 'back';
+
+  if (token) {
+    const oneShot = consumeOneShotKey(token);
+    if (!oneShot) {
+      return c.html(dashboardPage({ kind: 'expired' }));
+    }
+    const user = getUserById(oneShot.userId);
+    return c.html(
+      dashboardPage({
+        kind: 'new-key',
+        displayName: user?.displayName ?? user?.spotifyUserId ?? 'there',
+        apiKey: oneShot.apiKey,
+      }),
+    );
+  }
+
+  if (welcomeBack) {
+    return c.html(dashboardPage({ kind: 'welcome-back' }));
+  }
+
+  // No params — generic page (mostly hit if someone bookmarks /dashboard).
+  return c.html(dashboardPage({ kind: 'generic' }));
+});
+
 // MCP SDK OAuth discovery — return JSON 404 so the SDK doesn't crash parsing plain text
 app.get('/.well-known/oauth-authorization-server', (c) => c.json({ error: 'not_supported' }, 404));
 app.get('/.well-known/oauth-protected-resource', (c) => c.json({ error: 'not_supported' }, 404));
 
-// Health check (no auth required)
+// Health check (no auth required). Reports admin (user 1) connection status
+// for backward compatibility with the G2 plugin's config-form probe.
 app.get('/health', (c) => {
-  const authenticated = getTokens() !== null;
+  const admin = getUserById(1);
+  const authenticated = admin ? getTokens(admin.id) !== null : false;
   return c.json({ status: 'ok', authenticated });
 });
 
@@ -46,7 +82,7 @@ app.get('/health', (c) => {
 app.route('/auth', authRouter);
 
 // G2 REST API for the Even Realities G2 plugin. The router applies its own
-// apiKeyAuth() middleware internally, so we mount it before /mcp/*.
+// userApiKeyAuth() middleware internally, so we mount it before /mcp/*.
 app.route('/api/g2', g2Router);
 
 // Origin validation middleware for /mcp
@@ -62,8 +98,8 @@ app.use('/mcp/*', async (c, next) => {
   await next();
 });
 
-// API key middleware for /mcp (shared with /api/g2 via apiKeyAuth())
-app.use('/mcp/*', apiKeyAuth());
+// Admin auth for /mcp (MCP server runs against user 1 — the project owner).
+app.use('/mcp/*', adminApiKeyAuth());
 
 // MCP Streamable HTTP transport
 app.all('/mcp', async (c) => {
@@ -108,6 +144,6 @@ app.all('/mcp', async (c) => {
 export function startServer(port: number): void {
   const host = process.env.HOST ?? '127.0.0.1';
   serve({ fetch: app.fetch, port, hostname: host }, () => {
-    console.log(`Moodify MCP server running on ${host}:${port}`);
+    console.log(`Moodify server running on ${host}:${port}`);
   });
 }

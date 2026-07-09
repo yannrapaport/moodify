@@ -1,6 +1,15 @@
 import { Hono } from 'hono';
 import { generateVerifier, generateChallenge, buildSpotifyAuthUrl } from './pkce.js';
-import { saveTokens } from './token-store.js';
+import { generateApiKey, hashApiKey } from './api-key.js';
+import {
+  saveTokens,
+  upsertUserBySpotifyId,
+  updateUserApiKeyHash,
+  getUserBySpotifyId,
+  getUserById,
+  getUserByApiKey,
+  deleteUser,
+} from '../db/queries.js';
 import { randomBytes } from 'crypto';
 
 const SCOPES = [
@@ -24,10 +33,23 @@ interface PendingAuth {
 // In-memory store for PKCE verifiers — keyed by state param, TTL 10 minutes
 const pendingAuths = new Map<string, PendingAuth>();
 
+// One-shot tokens issued post-OAuth so the dashboard can display the freshly
+// generated API key exactly once. Keyed by random token, TTL 5 minutes, deleted
+// on first read.
+interface OneShotKey {
+  userId: number;
+  apiKey: string;
+  expiresAt: number;
+}
+const oneShotKeys = new Map<string, OneShotKey>();
+
 function evictStaleEntries(): void {
   const now = Date.now();
   for (const [state, entry] of pendingAuths.entries()) {
     if (entry.expiresAt < now) pendingAuths.delete(state);
+  }
+  for (const [token, entry] of oneShotKeys.entries()) {
+    if (entry.expiresAt < now) oneShotKeys.delete(token);
   }
 }
 
@@ -82,7 +104,6 @@ authRouter.get('/callback', async (c) => {
     redirect_uri: redirectUri,
     client_id: clientId,
     code_verifier: pending.verifier,
-    // No client_secret — PKCE flow is intentionally secret-free
   });
 
   const res = await fetch('https://accounts.spotify.com/api/token', {
@@ -97,16 +118,101 @@ authRouter.get('/callback', async (c) => {
   }
 
   const data = await res.json() as any;
-  saveTokens({
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token ?? null,
-    expiresAt: Math.floor(Date.now() / 1000) + data.expires_in,
-  });
+  const accessToken: string = data.access_token;
+  const refreshToken: string | null = data.refresh_token ?? null;
+  const expiresAt = Math.floor(Date.now() / 1000) + data.expires_in;
 
-  return c.html(`
-    <html><body style="font-family:sans-serif;text-align:center;padding:40px">
-      <h2>Authentication successful!</h2>
-      <p>Moodify is now connected to Spotify. You can close this tab.</p>
-    </body></html>
-  `);
+  // Identify the user by hitting /me with the new access_token.
+  const meRes = await fetch('https://api.spotify.com/v1/me', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!meRes.ok) {
+    return c.text(`Failed to fetch Spotify profile: ${await meRes.text()}`, 400);
+  }
+  const me = await meRes.json() as { id: string; display_name?: string; email?: string };
+
+  // First-time user: generate an API key, create the user, show it once.
+  // Returning user: keep their existing API key (don't rotate on re-login),
+  // refresh display_name/email if Spotify has changes.
+  const existing = getUserBySpotifyId(me.id);
+  let displayedApiKey: string | null = null;
+
+  let user;
+  if (existing) {
+    user = upsertUserBySpotifyId({
+      spotifyUserId: me.id,
+      displayName: me.display_name ?? null,
+      email: me.email ?? null,
+      apiKeyHash: existing.apiKeyHash, // ignored by upsert when row exists, but kept for clarity
+    });
+  } else {
+    const apiKey = generateApiKey();
+    user = upsertUserBySpotifyId({
+      spotifyUserId: me.id,
+      displayName: me.display_name ?? null,
+      email: me.email ?? null,
+      apiKeyHash: hashApiKey(apiKey),
+    });
+    displayedApiKey = apiKey;
+  }
+
+  saveTokens(user.id, { accessToken, refreshToken, expiresAt });
+
+  // If we just minted a key, stash it for one-shot display on /dashboard.
+  if (displayedApiKey) {
+    const token = randomBytes(24).toString('base64url');
+    oneShotKeys.set(token, {
+      userId: user.id,
+      apiKey: displayedApiKey,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    });
+    return c.redirect(`/dashboard?token=${encodeURIComponent(token)}`);
+  }
+
+  // Returning user — just confirm they're connected, no key to show.
+  return c.redirect('/dashboard?welcome=back');
 });
+
+authRouter.post('/regenerate', async (c) => {
+  // Authenticated via existing API key — user proves they own the account by
+  // supplying their current key, which we then rotate.
+  const auth = c.req.header('authorization') ?? '';
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  if (!match) return c.json({ error: 'unauthorized' }, 401);
+
+  const user = getUserByApiKey(match[1]);
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  const newKey = generateApiKey();
+  updateUserApiKeyHash(user.id, hashApiKey(newKey));
+  return c.json({ apiKey: newKey });
+});
+
+authRouter.post('/disconnect', async (c) => {
+  // Same auth pattern as /regenerate — the user proves ownership with their
+  // current API key, then we delete the account (cascades to tokens/etc).
+  const auth = c.req.header('authorization') ?? '';
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  if (!match) return c.json({ error: 'unauthorized' }, 401);
+
+  const user = getUserByApiKey(match[1]);
+  if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+  deleteUser(user.id);
+  return c.json({ ok: true });
+});
+
+/**
+ * Consumes a one-shot dashboard token and returns the freshly-minted API key
+ * exactly once. After this call the token is invalidated. Returns null if no
+ * matching token (expired, already consumed, or never existed).
+ */
+export function consumeOneShotKey(token: string): { userId: number; apiKey: string } | null {
+  evictStaleEntries();
+  const entry = oneShotKeys.get(token);
+  if (!entry) return null;
+  oneShotKeys.delete(token);
+  return { userId: entry.userId, apiKey: entry.apiKey };
+}
+
+export { getUserById };

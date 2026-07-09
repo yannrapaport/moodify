@@ -1,9 +1,20 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, spotifyFetch } from '../services/spotify.js';
-import { buildTasteProfile, getRecommendations, filterExclusions } from '../services/recommendation.js';
-import { fetchBatchAudioFeatures } from '../services/audio-features.js';
-import { getFeedbackByRating, getAllFeedback, getFeedbackCount, upsertFeedback, insertExclusion, deleteExclusion, getAllExclusions, upsertArtistGenres } from '../db/queries.js';
+import {
+  getClient,
+  spotifyFetch,
+  buildTasteProfile,
+  getRecommendations,
+  filterExclusions,
+  fetchBatchAudioFeatures,
+  getFeedbackByRating,
+  getAllFeedback,
+  upsertFeedback,
+  insertExclusion,
+  deleteExclusion,
+  getAllExclusions,
+  upsertArtistGenres,
+} from './_admin.js';
 import type { Exclusion } from '../types.js';
 
 function text(t: string) {

@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient } from '../services/spotify.js';
+import { getClient } from './_admin.js';
 
 const searchArgs = z.object({
   query: z.string().min(1),

@@ -64,19 +64,19 @@ describe('buildTasteProfile', () => {
     getFeedbackByRating.mockReturnValue([]);
     getAudioFeaturesForIds.mockReturnValue([]);
 
-    const profile = buildTasteProfile();
+    const profile = buildTasteProfile(1);
     expect(profile.sampleSize).toBe(0);
     expect(profile.energy).toBeGreaterThan(0);
   });
 
   it('computes weighted average correctly for liked tracks only', () => {
     const fb = makeFeedback({ trackId: 'a', rating: 1 });
-    getFeedbackByRating.mockImplementation((rating) => (rating === 1 ? [fb] : []));
+    getFeedbackByRating.mockImplementation((_uid, rating) => (rating === 1 ? [fb] : []));
     getAudioFeaturesForIds.mockReturnValue([
       makeAudioFeatures('a', { energy: 0.8, valence: 0.9, danceability: 0.7, acousticness: 0.1, instrumentalness: 0.05, tempo: 140 }),
     ]);
 
-    const profile = buildTasteProfile();
+    const profile = buildTasteProfile(1);
     expect(profile.energy).toBeCloseTo(0.8, 5);
     expect(profile.valence).toBeCloseTo(0.9, 5);
     expect(profile.danceability).toBeCloseTo(0.7, 5);
@@ -91,7 +91,7 @@ describe('buildTasteProfile', () => {
     const liked = makeFeedback({ trackId: 'a', rating: 1 });
     const disliked = makeFeedback({ trackId: 'b', rating: -1 });
 
-    getFeedbackByRating.mockImplementation((rating) =>
+    getFeedbackByRating.mockImplementation((_uid, rating) =>
       rating === 1 ? [liked] : [disliked],
     );
     getAudioFeaturesForIds.mockReturnValue([
@@ -99,20 +99,20 @@ describe('buildTasteProfile', () => {
       makeAudioFeatures('b', { energy: 0.2, valence: 0.2, danceability: 0.2, acousticness: 0.8, instrumentalness: 0.9, tempo: 80 }),
     ]);
 
-    const profile = buildTasteProfile();
+    const profile = buildTasteProfile(1);
     expect(profile.energy).toBeCloseTo(0.3, 5);
     expect(profile.sampleSize).toBe(2);
   });
 
   it('normalizes tempo to 0-1 range (divides by 220)', () => {
-    getFeedbackByRating.mockImplementation((rating) =>
+    getFeedbackByRating.mockImplementation((_uid, rating) =>
       rating === 1 ? [makeFeedback({ trackId: 'a', rating: 1 })] : [],
     );
     getAudioFeaturesForIds.mockReturnValue([
       makeAudioFeatures('a', { tempo: 110 }),
     ]);
 
-    const profile = buildTasteProfile();
+    const profile = buildTasteProfile(1);
     // 110 / 220 = 0.5
     expect(profile.tempo).toBeCloseTo(0.5, 5);
   });
@@ -120,7 +120,7 @@ describe('buildTasteProfile', () => {
   it('clamps values to [0, 1]', () => {
     const liked = makeFeedback({ trackId: 'a', rating: 1 });
     const disliked = makeFeedback({ trackId: 'b', rating: -1 });
-    getFeedbackByRating.mockImplementation((r) => (r === 1 ? [liked] : [disliked]));
+    getFeedbackByRating.mockImplementation((_uid, r) => (r === 1 ? [liked] : [disliked]));
     getAudioFeaturesForIds.mockReturnValue([
       // Both tracks have energy=0 for liked and energy=1 for disliked
       // Net: (0 * 1 + 1 * -1) / 2 = -0.5 → clamped to 0
@@ -128,7 +128,7 @@ describe('buildTasteProfile', () => {
       makeAudioFeatures('b', { energy: 1 }),
     ]);
 
-    const profile = buildTasteProfile();
+    const profile = buildTasteProfile(1);
     expect(profile.energy).toBeGreaterThanOrEqual(0);
     expect(profile.energy).toBeLessThanOrEqual(1);
   });
@@ -142,7 +142,7 @@ describe('filterExclusions', () => {
   it('returns all tracks when no exclusions exist', async () => {
     getAllExclusions.mockReturnValue([]);
     const tracks = [makeTrack('t1', ['a1']), makeTrack('t2', ['a2'])];
-    const result = await filterExclusions(tracks);
+    const result = await filterExclusions(1, tracks);
     expect(result).toHaveLength(2);
   });
 
@@ -151,7 +151,7 @@ describe('filterExclusions', () => {
       { type: 'track', value: 't1', label: 'Track 1' } as Exclusion,
     ]);
     const tracks = [makeTrack('t1', ['a1']), makeTrack('t2', ['a2'])];
-    const result = await filterExclusions(tracks);
+    const result = await filterExclusions(1, tracks);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('t2');
   });
@@ -161,7 +161,7 @@ describe('filterExclusions', () => {
       { type: 'artist', value: 'a1', label: 'Artist 1' } as Exclusion,
     ]);
     const tracks = [makeTrack('t1', ['a1']), makeTrack('t2', ['a2'])];
-    const result = await filterExclusions(tracks);
+    const result = await filterExclusions(1, tracks);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('t2');
   });
@@ -176,7 +176,7 @@ describe('filterExclusions', () => {
     });
 
     const tracks = [makeTrack('t1', ['a1']), makeTrack('t2', ['a2'])];
-    const result = await filterExclusions(tracks);
+    const result = await filterExclusions(1, tracks);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('t2');
   });
@@ -189,7 +189,7 @@ describe('filterExclusions', () => {
     getArtistGenres.mockReturnValue(null);
 
     const tracks = [makeTrack('t1', ['a1'])];
-    const result = await filterExclusions(tracks);
+    const result = await filterExclusions(1, tracks);
     expect(result).toHaveLength(1);
   });
 
@@ -205,7 +205,7 @@ describe('filterExclusions', () => {
       makeTrack('t2', ['a2']), // excluded by artist
       makeTrack('t3', ['a3']), // excluded by track
     ];
-    const result = await filterExclusions(tracks);
+    const result = await filterExclusions(1, tracks);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('t1');
   });

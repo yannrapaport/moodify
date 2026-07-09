@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, spotifyFetch } from '../services/spotify.js';
+import { getClient, spotifyFetch } from './_admin.js';
 
 const NO_DEVICE_MSG = 'No active Spotify device found. Open Spotify on your Mac or phone first.';
 
