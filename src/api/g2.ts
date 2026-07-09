@@ -5,6 +5,7 @@ import { getTokens } from '../db/queries.js';
 import { getClient, spotifyFetch } from '../services/spotify.js';
 import { buildTasteProfile, getRecommendations, filterExclusions } from '../services/recommendation.js';
 import { getFeedbackByRating, getAllExclusions } from '../db/queries.js';
+import { putRide, getRide } from '../services/trail-ride-store.js';
 
 /**
  * REST sub-router for the Even Realities G2 plugin.
@@ -400,4 +401,20 @@ g2Router.get('/lyrics', async (c) => {
   } catch {
     return c.json({ error: 'lyrics_unavailable' }, 502);
   }
+});
+
+// ── Trail relay (Allure) : boîte aux lettres RideState par tenant ──────────────
+g2Router.post('/trail/ride', async (c) => {
+  const userId = c.get('userId');
+  let raw: string;
+  try { raw = await c.req.text(); } catch { return c.json({ error: 'bad_body' }, 400); }
+  const trimmed = raw.trim();
+  if (trimmed === '' || trimmed === 'null') { putRide(userId, null); return c.body(null, 204); }
+  try { JSON.parse(trimmed); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  putRide(userId, trimmed);
+  return c.body(null, 204);
+});
+
+g2Router.get('/trail/ride', (c) => {
+  return c.json(getRide(c.get('userId')));
 });
