@@ -59,3 +59,15 @@ CREATE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key_hash);
 CREATE INDEX IF NOT EXISTS idx_feedback_user_rating ON feedback(user_id, rating);
 CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON feedback(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_exclusions_user_type ON exclusions(user_id, type);
+
+CREATE TABLE IF NOT EXISTS trails (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  points TEXT NOT NULL,
+  total_distance_m REAL NOT NULL,
+  elevation_gain_m REAL NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_trails_user ON trails(user_id, created_at DESC);

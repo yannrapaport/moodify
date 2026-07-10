@@ -286,3 +286,47 @@ export function getAllExclusions(userId: number): Exclusion[] {
     .all(userId) as any[];
   return rows.map((r) => ({ type: r.type, value: r.value, label: r.label }));
 }
+
+// ── Trails ────────────────────────────────────────────────────────────────────
+
+export interface Trail {
+  id: string;
+  name: string;
+  points: unknown[];
+  totalDistanceM: number;
+  elevationGainM: number;
+  createdAt: number;
+}
+
+interface TrailRow {
+  id: string; name: string; points: string;
+  total_distance_m: number; elevation_gain_m: number; created_at: number;
+}
+
+function rowToTrail(r: TrailRow): Trail {
+  return {
+    id: r.id, name: r.name,
+    points: JSON.parse(r.points) as unknown[],
+    totalDistanceM: r.total_distance_m,
+    elevationGainM: r.elevation_gain_m,
+    createdAt: r.created_at,
+  };
+}
+
+export function listTrails(userId: number): Trail[] {
+  const rows = getDb()
+    .prepare('SELECT id, name, points, total_distance_m, elevation_gain_m, created_at FROM trails WHERE user_id = ? ORDER BY created_at DESC')
+    .all(userId) as TrailRow[];
+  return rows.map(rowToTrail);
+}
+
+export function upsertTrail(userId: number, t: Trail): void {
+  getDb().prepare(
+    `INSERT OR REPLACE INTO trails (user_id, id, name, points, total_distance_m, elevation_gain_m, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(userId, t.id, t.name, JSON.stringify(t.points), t.totalDistanceM, t.elevationGainM, t.createdAt);
+}
+
+export function deleteTrailForUser(userId: number, id: string): void {
+  getDb().prepare('DELETE FROM trails WHERE user_id = ? AND id = ?').run(userId, id);
+}

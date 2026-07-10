@@ -5,6 +5,7 @@ import { getTokens } from '../db/queries.js';
 import { getClient, spotifyFetch } from '../services/spotify.js';
 import { buildTasteProfile, getRecommendations, filterExclusions } from '../services/recommendation.js';
 import { getFeedbackByRating, getAllExclusions } from '../db/queries.js';
+import { listTrails, upsertTrail, deleteTrailForUser, type Trail } from '../db/queries.js';
 import { putRide, getRide } from '../services/trail-ride-store.js';
 
 /**
@@ -417,4 +418,25 @@ g2Router.post('/trail/ride', async (c) => {
 
 g2Router.get('/trail/ride', (c) => {
   return c.json(getRide(c.get('userId')));
+});
+
+// ── Trail library (Allure) : parcours persistés par tenant ────────────────────
+g2Router.get('/trail/library', (c) => {
+  return c.json({ trails: listTrails(c.get('userId')) });
+});
+
+g2Router.post('/trail/library', async (c) => {
+  let t: any;
+  try { t = await c.req.json(); } catch { return c.json({ error: 'invalid_json' }, 400); }
+  if (!t || typeof t.id !== 'string' || typeof t.name !== 'string' || !Array.isArray(t.points)
+      || typeof t.totalDistanceM !== 'number' || typeof t.elevationGainM !== 'number' || typeof t.createdAt !== 'number') {
+    return c.json({ error: 'invalid_trail' }, 400);
+  }
+  upsertTrail(c.get('userId'), t as Trail);
+  return c.body(null, 204);
+});
+
+g2Router.delete('/trail/library/:id', (c) => {
+  deleteTrailForUser(c.get('userId'), c.req.param('id'));
+  return c.body(null, 204);
 });
