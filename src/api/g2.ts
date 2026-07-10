@@ -19,7 +19,7 @@ export const g2Router = new Hono<G2Env>();
 
 g2Router.use('*', cors({
   origin: (origin) => origin,
-  allowMethods: ['GET', 'POST', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Authorization', 'Content-Type'],
   maxAge: 600,
 }));
