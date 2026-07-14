@@ -7,6 +7,10 @@ import { buildTasteProfile, getRecommendations, filterExclusions } from '../serv
 import { getFeedbackByRating, getAllExclusions } from '../db/queries.js';
 import { listTrails, upsertTrail, deleteTrailForUser, type Trail } from '../db/queries.js';
 import { putRide, getRide } from '../services/trail-ride-store.js';
+import { parseBbox, resolvePlanetUrl, candidateDates, extractBbox } from '../services/map-extract.js';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readFile, unlink } from 'node:fs/promises';
 
 /**
  * REST sub-router for the Even Realities G2 plugin.
@@ -439,4 +443,26 @@ g2Router.post('/trail/library', async (c) => {
 g2Router.delete('/trail/library/:id', (c) => {
   deleteTrailForUser(c.get('userId'), c.req.param('id'));
   return c.body(null, 204);
+});
+
+// ── Carte hors-ligne (Allure SP2a) : extrait une bbox en .pmtiles ─────────────
+g2Router.get('/map/extract', async (c) => {
+  let bbox: [number, number, number, number];
+  try { bbox = parseBbox(c.req.query('bbox')); }
+  catch (e) { return c.json({ error: (e as Error).message }, 400); }
+
+  let planetUrl: string;
+  try { planetUrl = await resolvePlanetUrl(candidateDates(new Date())); }
+  catch { return c.json({ error: 'planet_unreachable' }, 502); }
+
+  const out = join(tmpdir(), `extract-${c.get('userId')}-${bbox.join('_')}.pmtiles`);
+  try {
+    await extractBbox(planetUrl, bbox, out);
+    const buf = await readFile(out);
+    return c.body(buf, 200, { 'content-type': 'application/octet-stream' });
+  } catch {
+    return c.json({ error: 'extract_failed' }, 500);
+  } finally {
+    await unlink(out).catch(() => {});
+  }
 });

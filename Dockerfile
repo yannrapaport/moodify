@@ -18,6 +18,13 @@ WORKDIR /app
 RUN apk upgrade --no-cache
 RUN chown node:node /app && mkdir -p /data && chown node:node /data
 
+# Binaire go-pmtiles pour l'extraction de cartes (Allure SP2a). Statique (CGO off) → OK Alpine.
+ARG PMTILES_VERSION=1.22.1
+RUN apk add --no-cache curl \
+ && curl -sSL "https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_Linux_x86_64.tar.gz" \
+    | tar -xz -C /usr/local/bin pmtiles \
+ && chmod +x /usr/local/bin/pmtiles
+
 # Run as non-root user
 USER node
 
