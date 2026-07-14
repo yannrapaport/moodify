@@ -10,6 +10,7 @@ import { putRide, getRide } from '../services/trail-ride-store.js';
 import { parseBbox, resolvePlanetUrl, candidateDates, extractBbox } from '../services/map-extract.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { readFile, unlink } from 'node:fs/promises';
 
 /**
@@ -455,7 +456,8 @@ g2Router.get('/map/extract', async (c) => {
   try { planetUrl = await resolvePlanetUrl(candidateDates(new Date())); }
   catch { return c.json({ error: 'planet_unreachable' }, 502); }
 
-  const out = join(tmpdir(), `extract-${c.get('userId')}-${bbox.join('_')}.pmtiles`);
+  // Nonce par requête → pas de collision si deux extractions identiques concurrentes.
+  const out = join(tmpdir(), `extract-${c.get('userId')}-${randomUUID()}.pmtiles`);
   try {
     await extractBbox(planetUrl, bbox, out);
     const buf = await readFile(out);
