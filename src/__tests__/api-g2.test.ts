@@ -437,6 +437,76 @@ describe('POST /api/g2/like', () => {
   });
 });
 
+// Issue #2: spotifyFetch never throws on 4xx/5xx — routes must not report success.
+describe('Spotify rejections surface as errors (issue #2)', () => {
+  const post = (path: string, body?: unknown) =>
+    buildApp().request(path, {
+      method: 'POST',
+      headers: { authorization: AUTH, 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  it.each([
+    ['/api/g2/next'],
+    ['/api/g2/prev'],
+  ])('%s maps 404 NO_ACTIVE_DEVICE to 503 no_device', async (path) => {
+    spotifyFetch.mockResolvedValue(new Response('{"error":{"reason":"NO_ACTIVE_DEVICE"}}', { status: 404 }));
+    const res = await post(path);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'no_device' });
+  });
+
+  it.each([
+    ['/api/g2/next', 403],
+    ['/api/g2/prev', 429],
+  ])('%s maps %i to 500 spotify_<status>', async (path, status) => {
+    spotifyFetch.mockResolvedValue(new Response('nope', { status }));
+    const res = await post(path);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: `spotify_${status}` });
+  });
+
+  it('/like returns spotify_403 instead of ok', async () => {
+    getClient.mockResolvedValue(makeClientStub());
+    spotifyFetch.mockResolvedValue(new Response('forbidden', { status: 403 }));
+    const res = await post('/api/g2/like', { trackId: 'explicit-id' });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'spotify_403' });
+  });
+
+  it('/play-pause returns spotify_429 when pause is rejected', async () => {
+    const client = makeClientStub();
+    client.player.getPlaybackState.mockResolvedValue({ is_playing: true, device: { id: 'd1' } });
+    getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response('slow down', { status: 429 }));
+    const res = await post('/api/g2/play-pause');
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'spotify_429' });
+  });
+
+  it('/play-pause returns no_device when resume gets 404', async () => {
+    const client = makeClientStub();
+    client.player.getPlaybackState.mockResolvedValue({ is_playing: false, device: { id: 'd1' } });
+    getClient.mockResolvedValue(client);
+    spotifyFetch.mockResolvedValue(new Response('', { status: 404 }));
+    const res = await post('/api/g2/play-pause');
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'no_device' });
+  });
+
+  it('/play-pause reports failure when the device transfer is rejected', async () => {
+    const client = makeClientStub();
+    client.player.getPlaybackState.mockResolvedValue(null);
+    getClient.mockResolvedValue(client);
+    spotifyFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ devices: [{ id: 'dev-1', is_active: false }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('premium required', { status: 403 }));
+    const res = await post('/api/g2/play-pause');
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'spotify_403' });
+  });
+});
+
 describe('GET /api/g2/lyrics', () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => {
