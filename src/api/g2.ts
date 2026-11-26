@@ -44,6 +44,15 @@ function errorResponse(c: Context, e: unknown) {
   return c.json({ error: msg }, 500);
 }
 
+// spotifyFetch never throws on HTTP errors: map a rejected Spotify call to the
+// G2 error shape. Returns null when the call succeeded (2xx, incl. 204).
+// 404 = NO_ACTIVE_DEVICE on player endpoints.
+function spotifyFailure(c: Context, res: Response) {
+  if (res.ok) return null;
+  if (res.status === 404) return c.json({ error: 'no_device' }, 503);
+  return c.json({ error: `spotify_${res.status}` }, 500);
+}
+
 // ── GET /now-playing ─────────────────────────────────────────────────────────
 g2Router.get('/now-playing', async (c) => {
   const userId = c.get('userId');
@@ -141,10 +150,12 @@ g2Router.post('/play-pause', async (c) => {
         return c.json({ error: 'no_device' }, 503);
       }
       const target = devices[0];
-      await spotifyFetch(userId, '/me/player', {
+      const transfer = await spotifyFetch(userId, '/me/player', {
         method: 'PUT',
         body: JSON.stringify({ device_ids: [target.id], play: true }),
       });
+      const transferFailed = spotifyFailure(c, transfer);
+      if (transferFailed) return transferFailed;
       return c.json({ isPlaying: true });
     }
 
@@ -153,11 +164,11 @@ g2Router.post('/play-pause', async (c) => {
     // Use raw fetch — the SDK chokes parsing Spotify's 204/empty-body responses
     // for player control endpoints.
     if (currentlyPlaying) {
-      await spotifyFetch(userId, '/me/player/pause', { method: 'PUT' });
-      return c.json({ isPlaying: false });
+      const res = await spotifyFetch(userId, '/me/player/pause', { method: 'PUT' });
+      return spotifyFailure(c, res) ?? c.json({ isPlaying: false });
     }
-    await spotifyFetch(userId, '/me/player/play', { method: 'PUT' });
-    return c.json({ isPlaying: true });
+    const res = await spotifyFetch(userId, '/me/player/play', { method: 'PUT' });
+    return spotifyFailure(c, res) ?? c.json({ isPlaying: true });
   } catch (e) {
     return errorResponse(c, e);
   }
@@ -171,8 +182,8 @@ g2Router.post('/next', async (c) => {
   }
 
   try {
-    await spotifyFetch(userId, '/me/player/next', { method: 'POST' });
-    return c.json({ ok: true });
+    const res = await spotifyFetch(userId, '/me/player/next', { method: 'POST' });
+    return spotifyFailure(c, res) ?? c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
   }
@@ -186,8 +197,8 @@ g2Router.post('/prev', async (c) => {
   }
 
   try {
-    await spotifyFetch(userId, '/me/player/previous', { method: 'POST' });
-    return c.json({ ok: true });
+    const res = await spotifyFetch(userId, '/me/player/previous', { method: 'POST' });
+    return spotifyFailure(c, res) ?? c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
   }
@@ -222,8 +233,8 @@ g2Router.post('/like', async (c) => {
     }
 
     // Raw fetch — SDK saveTracks chokes on Spotify's empty 200 response.
-    await spotifyFetch(userId, `/me/tracks?ids=${encodeURIComponent(trackId)}`, { method: 'PUT' });
-    return c.json({ ok: true, trackId });
+    const res = await spotifyFetch(userId, `/me/tracks?ids=${encodeURIComponent(trackId)}`, { method: 'PUT' });
+    return spotifyFailure(c, res) ?? c.json({ ok: true, trackId });
   } catch (e) {
     return errorResponse(c, e);
   }
@@ -359,13 +370,7 @@ g2Router.post('/play-context', async (c) => {
       body: JSON.stringify({ context_uri: contextUri }),
     });
     // 404 with "NO_ACTIVE_DEVICE" comes through here on a cold device.
-    if (res.status === 404) {
-      return c.json({ error: 'no_device' }, 503);
-    }
-    if (!res.ok && res.status !== 204) {
-      return c.json({ error: `spotify_${res.status}` }, 500);
-    }
-    return c.json({ ok: true });
+    return spotifyFailure(c, res) ?? c.json({ ok: true });
   } catch (e) {
     return errorResponse(c, e);
   }
